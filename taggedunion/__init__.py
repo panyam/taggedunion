@@ -7,18 +7,24 @@ class Variant(object):
         self.constructor = constructor
         self.from_constructor = from_constructor 
 
+class InvalidVariantError(Exception):
+    def __init__(self, expected_variant, called_with):
+        Exception.__init__(self, "%s variant expected, but %s invoked" % (expected_variant, called_with))
+        self.called_with = called_with
+        self.expected_variant = expected_variant 
+
 class UnionMeta(type):
     def __new__(cls, name, bases, dct):
         x = super().__new__(cls, name, bases, dct)
         def makechecker(vtype):
             return property(lambda x: isinstance(x._variant_value, vtype))
 
-        def makegetter(checker, vtype):
+        def makegetter(vname, checker):
             def getter(self):
                 if getattr(self, checker):
                     return self._variant_value
                 else:
-                    assert False, "Invalid variant type getter called"
+                    raise InvalidVariantError(self._variant_type, vname)
             return property(getter)
 
         def make_constructor(vname, vtype):
@@ -55,7 +61,7 @@ class UnionMeta(type):
 
             vtype,checker = variant.vartype, variant.checker
             newfields[checker] = makechecker(vtype)
-            newfields[vname] = makegetter(checker, vtype)
+            newfields[vname] = makegetter(vname, checker)
             newfields[variant.constructor] = make_constructor(vname, vtype)
             newfields[variant.from_constructor] = make_from_constructor(vname, vtype)
         for k,v in newfields.items(): setattr(x,k,v)
@@ -75,8 +81,13 @@ class Union(metaclass = UnionMeta):
         return "<%s.%s(%s) at %x>" % (self.__class__.__module__, self.__class__.__name__, self.variant_type, id(self))
 
     def __eq__(self, another):
+        if another is None: return False
         v1,v2 = self.variant_value, another.variant_value
         return type(v1) == type(v2) and v1 == v2
+
+    def __getattr__(self, key):
+        """ Forward lookups to variant value directly if it is missing in here. """
+        return getattr(self.variant_value, key)
 
     @classmethod
     def hasvariant(cls, name):
@@ -120,11 +131,16 @@ class CaseMatcherMeta(type):
 
 class CaseMatcher(metaclass = CaseMatcherMeta):
     def select(self, expr : Union):
+        if not expr: return None, None
         for vname, variant in expr.__variants__:
             if getattr(expr, variant.checker):
-                return self.__cases__[vname], expr.variant_value
+                return self.__cases__[vname], self.project(expr)
         assert False, "Case not matched"
+
+    def project(self, expr : Union):
+        return expr.variant_value
 
     def __call__(self, value, *args, **kwargs):
         func, child = self.select(value)
-        return func(self, child, *args, **kwargs)
+        if func:
+            return func(self, child, *args, **kwargs)
