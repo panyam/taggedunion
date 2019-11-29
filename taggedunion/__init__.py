@@ -1,5 +1,8 @@
 from ipdb import set_trace
 
+def with_metaclass(meta, base=object, BaseName = "NewBase"):
+    return meta(BaseName, (base,), {})
+
 class Variant(object):
     def __init__(self, vartype, checker = None, constructor = None, from_constructor = None):
         self.vartype = vartype
@@ -13,62 +16,7 @@ class InvalidVariantError(Exception):
         self.called_with = called_with
         self.expected_variant = expected_variant 
 
-class UnionMeta(type):
-    def __new__(cls, name, bases, dct):
-        x = super().__new__(cls, name, bases, dct)
-        def makechecker(vtype):
-            return property(lambda x: isinstance(x._variant_value, vtype))
-
-        def makegetter(vname, checker):
-            def getter(self):
-                if getattr(self, checker):
-                    return self._variant_value
-                else:
-                    raise InvalidVariantError(self._variant_type, vname)
-            return property(getter)
-
-        def make_constructor(vname, vtype):
-            def constructor(cls, *args, **kwargs):
-                value = vtype(*args, **kwargs)
-                out = cls()
-                out._variant_value = value
-                out._variant_type = vname
-                return out
-            return classmethod(constructor)
-
-        def make_from_constructor(vname, vtype):
-            def constructor(cls, value):
-                if type(value) is not vtype: set_trace()
-                assert type(value) is vtype
-                out = cls()
-                out._variant_value = value
-                out._variant_type = vname
-                return out
-            return classmethod(constructor)
-
-        __variants__ = getattr(x, "__variants__", [])[:]
-        newfields = {}
-        for vname,variant in x.__dict__.items():
-            if not isinstance(variant, Variant): continue
-
-            __variants__.append((vname, variant))
-            if not variant.checker:
-                variant.checker = "is_" + vname
-            if not variant.constructor:
-                variant.constructor = "as_" + vname
-            if not variant.from_constructor:
-                variant.from_constructor = "from_" + vname
-
-            vtype,checker = variant.vartype, variant.checker
-            newfields[checker] = makechecker(vtype)
-            newfields[vname] = makegetter(vname, checker)
-            newfields[variant.constructor] = make_constructor(vname, vtype)
-            newfields[variant.from_constructor] = make_from_constructor(vname, vtype)
-        for k,v in newfields.items(): setattr(x,k,v)
-        setattr(x, "__variants__", __variants__)
-        return x
-
-class Union(metaclass = UnionMeta):
+class UnionBase(object):
     @property
     def variant_value(self):
         return self._variant_value
@@ -77,11 +25,14 @@ class Union(metaclass = UnionMeta):
     def variant_type(self):
         return self._variant_type
 
+    def __hash__(self):
+        return hash(self.__class__.__name__) + hash(self.variant_type) # + hash(self.variant_value)
+
     def __repr__(self):
         return "<%s.%s(%s) at %x>" % (self.__class__.__module__, self.__class__.__name__, self.variant_type, id(self))
 
     def __eq__(self, another):
-        if another is None: return False
+        if another is None or not hasattr(another, "variant_value"): return False
         v1,v2 = self.variant_value, another.variant_value
         return type(v1) == type(v2) and v1 == v2
 
@@ -96,6 +47,92 @@ class Union(metaclass = UnionMeta):
     @classmethod
     def numvariants(cls):
         return len(cls.__variants__)
+
+    @classmethod
+    def add_variant(cls, vname, variant):
+        if not variant.checker:
+            variant.checker = "is_" + vname
+        if not variant.constructor:
+            variant.constructor = "as_" + vname
+        if not variant.from_constructor:
+            variant.from_constructor = "from_" + vname
+
+        cls.__variants__.append((vname, variant))
+        vtype,checker = variant.vartype, variant.checker
+        setattr(cls, checker, cls._makechecker(vtype))
+        setattr(cls, vname, cls._makeproperty(vname, vtype, checker))
+        setattr(cls, variant.constructor, cls._make_constructor(vname, vtype))
+        setattr(cls, variant.from_constructor, cls._make_from_constructor(vname, vtype))
+
+    @classmethod
+    def ensure_type(cls, vartype):
+        if type(vartype) is str:
+            ## types defined by string lazily so need resolution
+            if "." not in vartype:
+                thismod = cls.__module__ 
+                vartype = thismod + "." + vartype
+            parts = vartype.split(".")
+            first,last = parts[:-1],parts[-1]
+            module = ".".join(first)
+            import importlib
+            module = importlib.import_module(module)
+            vartype = getattr(module, last)
+        return vartype
+
+    @classmethod
+    def _makechecker(cls, vtype):
+        return property(lambda x: isinstance(x._variant_value, cls.ensure_type(vtype)))
+
+    @classmethod
+    def _makeproperty(cls, vname, vtype, checker):
+        def getter(self):
+            if getattr(self, checker):
+                return self._variant_value
+            else:
+                raise InvalidVariantError(self._variant_type, vname)
+        def setter(self, value):
+            vartype = self.__class__.ensure_type(vtype)
+            if type(value) is not vartype:
+                raise Exception(f"Expected value type to be {vartype}, found: {type(value)}")
+            self._variant_type = vname
+            self._variant_value = value
+        return property(getter, setter)
+
+    @classmethod
+    def _make_constructor(cls, vname, vtype):
+        def constructor(cls, *args, **kwargs):
+            value = vtype(*args, **kwargs)
+            out = cls()
+            out._variant_value = value
+            out._variant_type = vname
+            return out
+        return classmethod(constructor)
+
+    @classmethod
+    def _make_from_constructor(cls, vname, vtype):
+        def constructor(cls, value):
+            if type(value) is not vtype:
+                raise Exception(f"Expected value type to be {vtype}, found: {type(value)}")
+            out = cls()
+            out._variant_value = value
+            out._variant_type = vname
+            return out
+        return classmethod(constructor)
+
+class UnionMeta(type):
+    def __new__(cls, name, bases, dct):
+        x = super().__new__(cls, name, bases, dct)
+
+        __variants__ = getattr(x, "__variants__", [])[:]
+        setattr(x, "__variants__", __variants__)
+
+        for vname,variant in dct.items():
+            if isinstance(variant, Variant):
+                x.add_variant(vname, variant)
+        return x
+
+class Union(with_metaclass(UnionMeta, UnionBase)):
+    pass
 
 def case(name):
     def decorator(func):
@@ -132,6 +169,8 @@ class CaseMatcherMeta(type):
 class CaseMatcher(metaclass = CaseMatcherMeta):
     def select(self, expr : Union):
         if not expr: return None, None
+        if not isinstance(expr, Union):
+            raise Exception(f"{expr} is not a Union instance")
         for vname, variant in expr.__variants__:
             if getattr(expr, variant.checker):
                 return self.__cases__[vname], self.project(expr)
