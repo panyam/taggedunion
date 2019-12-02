@@ -45,6 +45,13 @@ class UnionBase(object):
         return name in (n for n,v in cls.__variants__)
 
     @classmethod
+    def get_variant_type(cls, name):
+        for n,v in cls.__variants__:
+            if n == name:
+                return cls.ensure_type(v)
+        return None
+
+    @classmethod
     def numvariants(cls):
         return len(cls.__variants__)
 
@@ -101,7 +108,8 @@ class UnionBase(object):
     @classmethod
     def _make_constructor(cls, vname, vtype):
         def constructor(cls, *args, **kwargs):
-            value = vtype(*args, **kwargs)
+            vartype = cls.ensure_type(vtype)
+            value = vartype(*args, **kwargs)
             out = cls()
             out._variant_value = value
             out._variant_type = vname
