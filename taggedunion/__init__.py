@@ -99,7 +99,7 @@ class UnionBase(object):
                 raise InvalidVariantError(self._variant_type, vname)
         def setter(self, value):
             vartype = self.__class__.ensure_type(vtype)
-            if type(value) is not vartype:
+            if not issubclass(value.__class__, vartype):
                 raise Exception(f"Expected value type to be {vartype}, found: {type(value)}")
             self._variant_type = vname
             self._variant_value = value

@@ -32,7 +32,7 @@ def get_description():
     return open("README.rst").read()
 
 setup(name="taggedunion",
-      version="0.0.1",
+      version="0.0.2",
       author="Sri Panyam",
       author_email="sri.panyam@gmail.com",
       requires = [],
