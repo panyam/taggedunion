@@ -17,6 +17,14 @@ class InvalidVariantError(Exception):
         self.expected_variant = expected_variant 
 
 class UnionBase(object):
+    def __init__(self, **kwargs):
+        self._variant_value = None
+        self._variant_type = None
+        assert len(kwargs) <= 1
+        for k,v in kwargs.items():
+            self._variant_type = k
+            self._variant_value = v
+
     @property
     def variant_value(self):
         return self._variant_value
@@ -178,14 +186,21 @@ class CaseMatcher(metaclass = CaseMatcherMeta):
     def select(self, expr : Union):
         if not expr: return None, None
         if not isinstance(expr, Union):
+            set_trace()
             raise Exception(f"{expr} is not a Union instance")
         for vname, variant in expr.__variants__:
             if getattr(expr, variant.checker):
                 return self.__cases__[vname], self.project(expr)
+        set_trace()
         assert False, "Case not matched"
 
     def project(self, expr : Union):
         return expr.variant_value
+
+    def __init__(self, *args, **kwargs):
+        self.value = None
+        if args or kwargs:
+            self.value = self(*args, **kwargs)
 
     def __call__(self, value, *args, **kwargs):
         func, child = self.select(value)
